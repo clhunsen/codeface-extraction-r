@@ -56,7 +56,7 @@ BASE.ARTIFACTS = c(
 ## 'commits.filter.base.artifact' and 'commits.filter.untracked.files' of the corresponding 'ProjectConf' object)
 DATASOURCE.TO.ARTIFACT.FUNCTION = list(
     "commits" = "get.commits.filtered",
-    "mails"   = "get.mails",
+    "mails"   = "get.mails.filtered",
     "issues"  = "get.issues.filtered"
 )
 
@@ -109,6 +109,7 @@ ProjectData = R6::R6Class("ProjectData",
         commit.messages = NULL, # data.frame
         ## mails
         mails = NULL, # data.frame
+        mails.filtered = NULL, # data.frame
         mails.patchstacks = NULL, # list
         ## issues
         issues = NULL, #data.frame
@@ -130,9 +131,10 @@ ProjectData = R6::R6Class("ProjectData",
         #' @param commits the data.frame of commits on which filtering will be applied
         #' @param remove.untracked.files flag whether untracked files are kept or removed
         #' @param remove.base.artifact flag whether the base artifact is kept or removed
+        #' @param filter.bots flag commits by bots should be removed
         #'
         #' @return the commits after all filters have been applied
-        filter.commits = function(commits, remove.untracked.files, remove.base.artifact) {
+        filter.commits = function(commits, remove.untracked.files, remove.base.artifact, filter.bots) {
             logging::logdebug("filter.commits: starting.")
 
             ## filter out the untracked files
@@ -145,6 +147,11 @@ ProjectData = R6::R6Class("ProjectData",
                 commits = subset(commits, !(artifact %in% BASE.ARTIFACTS))
             }
 
+            ## filter out all commits made by bots
+            if (filter.bots) {
+                commits = self$filter.bots(commits)
+            }
+
             logging::logdebug("filter.commits: finished.")
             return(commits)
         },
@@ -155,13 +162,19 @@ ProjectData = R6::R6Class("ProjectData",
         #'
         #' @param issues the data.frame of issues on which filtering will be applied
         #' @param issues.only.comments flag whether non-comment issue events are removed
+        #' @param filter.bots flag whether bot issues are to be removed
         #'
         #' @return the issues after all filters have been applied
-        filter.issues = function(issues, issues.only.comments) {
+        filter.issues = function(issues, issues.only.comments, filter.bots) {
             logging::logdebug("filter.issues: starting.")
 
             if (issues.only.comments) {
                 issues = issues[issues[["event.name"]] == "commented", ]
+            }
+
+            ## filter out all issues made by bots
+            if (filter.bots) {
+                issues = self$filter.bots(issues)
             }
 
             logging::logdebug("filter.issues: finished.")
@@ -186,9 +199,9 @@ ProjectData = R6::R6Class("ProjectData",
             logging::logdebug("filter.patchstack.mails: starting.")
 
             ## return immediately if no mails are available
-            if (nrow(private$mails) == 0) {
+            if (nrow(private$mails.filtered) == 0) {
                 private$mails.patchstacks = NULL
-                return(private$mails)
+                return(private$mails.filtered)
             }
 
             ## retrieve mails grouped by thread IDs
@@ -240,6 +253,25 @@ ProjectData = R6::R6Class("ProjectData",
             logging::logdebug("filter.patchstack.mails: finished.")
             return(mails)
         },
+
+        #' Filter mail data by for example removing all mails by bots
+        #'
+        #' @param mails the data.frame of mails on which filtering will be applied
+        #' @param filter.bots flag whether bot mails are to be removed
+        #'
+        #' @return the mails after all filters have been applied
+        filter.mails = function(mails, filter.bots) {
+            logging::logdebug("filter.mails: starting.")
+
+            ## filter out all mails made by bots
+            if (filter.bots) {
+                mails = self$filter.bots(mails)
+            }
+
+            logging::logdebug("filter.mails: finished.")
+            return(mails)
+        },
+
 
         ## * * commit message data ------------------------------------------
 
@@ -403,21 +435,21 @@ ProjectData = R6::R6Class("ProjectData",
             logging::logdebug("update.pasta.mail.data: starting.")
 
             ## return immediately if no mails available
-            if (!is.null(private$mails)) {
+            if (!is.null(private$mails.filtered)) {
 
                 ## remove previous PaStA data
-                private$mails["pasta"] = NULL
-                private$mails["revision.set.id"] = NULL
+                private$mails.filtered["pasta"] = NULL
+                private$mails.filtered["revision.set.id"] = NULL
 
                 ## merge PaStA data
-                private$mails = merge(private$mails, private$pasta.mails,
+                private$mails.filtered = merge(private$mails.filtered, private$pasta.mails,
                                       by = "message.id", all.x = TRUE, sort = FALSE)
 
                 ## sort by date again because 'merge' disturbs the order
-                private$mails = private$mails[order(private$mails[["date"]], decreasing = FALSE), ]
+                private$mails.filtered = private$mails.filtered[order(private$mails.filtered[["date"]], decreasing = FALSE), ]
 
                 ## remove duplicated revision set ids
-                private$mails[["revision.set.id"]] = sapply(private$mails[["revision.set.id"]], function(rev.id) {
+                private$mails.filtered[["revision.set.id"]] = sapply(private$mails.filtered[["revision.set.id"]], function(rev.id) {
                     return(unique(rev.id))
                 })
             }
@@ -442,7 +474,7 @@ ProjectData = R6::R6Class("ProjectData",
             private$aggregate.pasta.data()
 
             ## update mail data by attaching PaStA data
-            if (!is.null(private$mails)) {
+            if (!is.null(private$mails.filtered)) {
                 private$update.pasta.mail.data()
             }
 
@@ -593,6 +625,7 @@ ProjectData = R6::R6Class("ProjectData",
             private$issues.filtered = NULL
             private$issues = NULL
             private$mails = NULL
+            private$mails.filtered = NULL
             private$mails.patchstacks = NULL
             private$pasta = NULL
             private$pasta.mails = NULL
@@ -704,7 +737,8 @@ ProjectData = R6::R6Class("ProjectData",
                 private$commits.filtered = private$filter.commits(
                     self$get.commits(),
                     private$project.conf$get.value("commits.filter.untracked.files"),
-                    private$project.conf$get.value("commits.filter.base.artifact")
+                    private$project.conf$get.value("commits.filter.base.artifact"),
+                    private$project.conf$get.value("filter.bots")
                 )
             }
             return(private$commits.filtered)
@@ -718,12 +752,13 @@ ProjectData = R6::R6Class("ProjectData",
         #'
         #' @param remove.untracked.files flag whether untracked files are kept or removed
         #' @param remove.base.artifact flag whether the base artifact is kept or removed
+        #' @param filter.bots flag commits by bots should be removed
         #'
         #' @return the commits retrieved by the method \code{get.commits} after all filters have been applied
         #'
         #' @seealso get.commits.filtered
-        get.commits.filtered.uncached = function(remove.untracked.files, remove.base.artifact) {
-            return (private$filter.commits(self$get.commits(), remove.untracked.files, remove.base.artifact))
+        get.commits.filtered.uncached = function(remove.untracked.files, remove.base.artifact, filter.bots = FALSE) {
+            return (private$filter.commits(self$get.commits(), remove.untracked.files, remove.base.artifact, filter.bots))
         },
 
         #' Get the list of commits which have the artifact kind configured in the \code{project.conf}.
@@ -963,8 +998,8 @@ ProjectData = R6::R6Class("ProjectData",
                     ## read mail data if filtering patchstack mails
                     if (is.null(private$mails)
                         && private$project.conf$get.value("mails.filter.patchstack.mails")) {
-                        ## just triggering read-in, no assignment; the mails are stored within 'get.mails'
-                        self$get.mails()
+                        ## just triggering read-in, no assignment; the mails are stored within 'get.mails.filtered'
+                        self$get.mails.filtered()
                     } else {
                         ## update all PaStA-related data
                         private$update.pasta.data()
@@ -1001,7 +1036,7 @@ ProjectData = R6::R6Class("ProjectData",
                 if (is.null(private$mails) &&
                     private$project.conf$get.value("mails.filter.patchstack.mails")) {
                     ## just triggering read-in, no storage
-                    self$get.mails()
+                    self$get.mails.filtered()
 
                 } else {
                     ## update all PaStA-related data
@@ -1018,7 +1053,7 @@ ProjectData = R6::R6Class("ProjectData",
 
             ## remove message ids that don't appear in the mail data
             if (!is.null(private$mails)) {
-                rev.id.contained = private$pasta[["revision.set.id"]] %in% private$mails[["revision.set.id"]]
+                rev.id.contained = private$pasta[["revision.set.id"]] %in% private$mails.filtered[["revision.set.id"]]
                 private$pasta = private$pasta[rev.id.contained, ]
             }
 
@@ -1048,12 +1083,30 @@ ProjectData = R6::R6Class("ProjectData",
             ## if mails are not read already, do this
             if (is.null(private$mails)) {
                 mails.read = read.mails(self$get.data.path())
-
                 self$set.mails(mails.read)
             }
             private$extract.timestamps(source = "mails")
 
             return(private$mails)
+        },
+
+        #' Get the mail data.
+        #' If it does not already exist call the read method.
+        #' Call the setter function to set the data and add PaStA
+        #' data if configured in the field \code{project.conf}.
+        #'
+        #' @return the mail data
+        get.mails.filtered = function() {
+            logging::loginfo("Getting e-mail data.")
+
+            ## if mails are not read already, do this
+            if (is.null(private$mails)) {
+                mails.read = read.mails(self$get.data.path())
+                self$set.mails(mails.read)
+            }
+            private$extract.timestamps(source = "mails")
+
+            return(private$mails.filtered)
         },
 
         #' Set the mail data to the given new data and add PaStA data
@@ -1069,11 +1122,17 @@ ProjectData = R6::R6Class("ProjectData",
 
             ## store mail data
             private$mails = mail.data
+            private$mails.filtered = mail.data
 
             ## filter patchstack mails and store again
             if (private$project.conf$get.value("mails.filter.patchstack.mails")) {
-                private$mails = private$filter.patchstack.mails()
+                private$mails.filtered = private$filter.patchstack.mails()
             }
+
+            ## do further filterings
+            private$mails.filtered = private$filter.mails(
+                private$mails.filtered,
+                private$project.conf$get.value("filter.bots"))
 
             ## add PaStA data if wanted
             if (private$project.conf$get.value("pasta")) {
@@ -1088,6 +1147,7 @@ ProjectData = R6::R6Class("ProjectData",
 
             ## sort by date
             private$mails = private$mails[order(private$mails[["date"]], decreasing = FALSE), ]
+            private$mails.filtered = private$mails.filtered[order(private$mails.filtered[["date"]], decreasing = FALSE), ]
         },
 
         #' Get the author data.
@@ -1113,6 +1173,19 @@ ProjectData = R6::R6Class("ProjectData",
             private$authors = data
         },
 
+        #' Filters bots from given data
+        #'
+        #' @param data.to.filter A data frame, with the standard author columns,
+        #'                       from which all rows with bot authors are removed
+        filter.bots = function(data.to.filter) {
+            authors = self$get.authors()
+            bot.indices = authors[match(data.to.filter[["author.email"]],
+                                        authors[["author.email"]]), "is.bot"]
+            # retain if entry is TRUE or NA
+            bot.indices = !bot.indices | is.na(bot.indices)
+            return (data.to.filter[bot.indices,])
+        },
+
         #' Get the issue data, filtered according to options in the project configuration:
         #' * The option \code{issues.only.comments} removes all events that are not comments
         #'   from the issue data.
@@ -1127,7 +1200,8 @@ ProjectData = R6::R6Class("ProjectData",
             if (is.null(private$issues.filtered)) {
                 private$issues.filtered = private$filter.issues(
                     self$get.issues(),
-                    private$project.conf$get.value("issues.only.comments"))
+                    private$project.conf$get.value("issues.only.comments"),
+                    private$project.conf$get.value("filter.bots"))
             }
             return(private$issues.filtered)
         },
@@ -1143,9 +1217,9 @@ ProjectData = R6::R6Class("ProjectData",
         #' @return the issue data
         #'
         #' @seealso get.issues.filtered
-        get.issues.filtered.uncached = function(issues.only.comments) {
+        get.issues.filtered.uncached = function(issues.only.comments, remove.bots = FALSE) {
             logging::loginfo("Getting issue data")
-            return(private$filter.issues(self$get.issues(), issues.only.comments))
+            return(private$filter.issues(self$get.issues(), issues.only.comments, remove.bots))
         },
 
         #' Get the issue data, unfiltered.
